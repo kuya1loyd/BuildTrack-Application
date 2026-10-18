@@ -1,0 +1,13 @@
+{
+  "name": "buildtrack-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "HTTP bridge that lets the Flutter web build talk to the Neon Postgres database (browsers cannot open raw TCP sockets).",
+  "scripts": {
+    "start": "node api.mjs"
+  },
+  "dependencies": {
+    "pg": "^8.13.0"
+  }
+}
