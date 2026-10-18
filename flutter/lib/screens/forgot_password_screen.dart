@@ -210,15 +210,18 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
               child: Column(
                 children: [
                   AppField(
-                    label: 'Email',
-                    hint: 'you@company.com',
+                    label: 'Email or phone number',
+                    hint: 'you@company.com or 0912 345 6789',
                     controller: _email,
                     glass: true,
-                    keyboardType: TextInputType.emailAddress,
-                    prefixIcon: Ionicons.mail_outline,
-                    validator: (v) => (v == null || !v.contains('@'))
-                        ? 'Enter a valid email'
-                        : null,
+                    keyboardType: TextInputType.text,
+                    prefixIcon: Ionicons.person_outline,
+                    validator: (v) {
+                      if (v == null || v.trim().isEmpty) {
+                        return 'Enter your email or phone number';
+                      }
+                      return null;
+                    },
                   ),
                   const SizedBox(height: Spacing.lg),
                   AppField(

@@ -198,14 +198,34 @@ class _SignInScreenState extends State<SignInScreen> {
                         children: [
                           AppField(
                             label: 'Email or telephone number',
-                            hint: 'you@company.com',
+                            hint: 'you@company.com or 0912 345 6789',
                             controller: _email,
-                            keyboardType: TextInputType.emailAddress,
+                            keyboardType: TextInputType.text,
                             glass: true,
-                            prefixIcon: Ionicons.mail_outline,
-                            validator: (v) => (v == null || !v.contains('@'))
-                                ? 'Enter a valid email'
-                                : null,
+                            prefixIcon: Ionicons.person_outline,
+                            validator: (v) {
+                              if (v == null || v.trim().isEmpty) {
+                                return 'Enter your email or phone number';
+                              }
+                              final trimmed = v.trim();
+                              if (trimmed.contains('@')) {
+                                final emailRegex = RegExp(
+                                  r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$',
+                                );
+                                if (!emailRegex.hasMatch(trimmed)) {
+                                  return 'Enter a valid email';
+                                }
+                                return null;
+                              }
+                              final digits = trimmed.replaceAll(
+                                RegExp(r'\D'),
+                                '',
+                              );
+                              if (digits.length < 7 || digits.length > 15) {
+                                return 'Enter a valid phone number or email';
+                              }
+                              return null;
+                            },
                           ),
                           const SizedBox(height: Spacing.lg),
                           AppField(

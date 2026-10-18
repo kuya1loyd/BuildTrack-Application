@@ -16,7 +16,11 @@ flutter/env.json
 node_modules/
 server/node_modules/
 
-# OS
+# OS & Binaries
 .DS_Store
 *.orig.*
+*.apk
+download_server.mjs
+
+
 

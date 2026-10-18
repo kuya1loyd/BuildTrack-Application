@@ -49,6 +49,30 @@ class AuthRepository {
   AuthRepository._();
   static final AuthRepository instance = AuthRepository._();
 
+  static String phoneDigits(String v) => v.replaceAll(RegExp(r'\D'), '');
+
+  static bool phoneMatches(String a, String b) {
+    final da = phoneDigits(a);
+    final db = phoneDigits(b);
+    if (da.isEmpty || db.isEmpty) return false;
+    if (da == db) return true;
+    final minLen = da.length < db.length ? da.length : db.length;
+    if (minLen >= 7) {
+      if (da.endsWith(db) || db.endsWith(da)) return true;
+      if (da.length >= 9 && db.length >= 9) {
+        if (da.substring(da.length - 9) == db.substring(db.length - 9)) {
+          return true;
+        }
+      }
+      final daTrim = da.startsWith('0') ? da.substring(1) : da;
+      final dbTrim = db.startsWith('0') ? db.substring(1) : db;
+      if (daTrim.isNotEmpty && dbTrim.isNotEmpty) {
+        if (daTrim.endsWith(dbTrim) || dbTrim.endsWith(daTrim)) return true;
+      }
+    }
+    return false;
+  }
+
   Future<UserProfile> signUp({
     required String name,
     required String email,
@@ -57,7 +81,16 @@ class AuthRepository {
     String phone = '',
     String role = 'Project Manager',
   }) async {
-    final normalizedEmail = email.trim().toLowerCase();
+    var normalizedEmail = email.trim().toLowerCase();
+    var normalizedPhone = phone.trim();
+
+    if (!normalizedEmail.contains('@')) {
+      final digits = phoneDigits(normalizedEmail);
+      if (digits.length >= 7) {
+        if (normalizedPhone.isEmpty) normalizedPhone = normalizedEmail;
+        normalizedEmail = '$digits@phone.buildtrack.local';
+      }
+    }
 
     if (kIsWeb) {
       final body = await _postAuth('/auth/signup', {
@@ -65,7 +98,7 @@ class AuthRepository {
         'email': normalizedEmail,
         'password': password,
         'company': company.trim(),
-        'phone': phone.trim(),
+        'phone': normalizedPhone,
         'role': role,
       });
       return _userFromBridge(body);
@@ -74,6 +107,15 @@ class AuthRepository {
     final existing = await _findByEmail(normalizedEmail);
     if (existing != null) {
       throw const AuthException('An account with this email already exists.');
+    }
+
+    if (normalizedPhone.isNotEmpty) {
+      final existingPhone = await _findByPhone(normalizedPhone);
+      if (existingPhone != null) {
+        throw const AuthException(
+          'An account with this phone number already exists. Please sign in instead.',
+        );
+      }
     }
 
     final passwordHash = PasswordHash.hash(password);
@@ -90,7 +132,7 @@ class AuthRepository {
           'email': normalizedEmail,
           'passwordHash': passwordHash,
           'company': company.trim(),
-          'phone': phone.trim(),
+          'phone': normalizedPhone,
           'role': role,
         },
       );
@@ -111,12 +153,12 @@ class AuthRepository {
     required String email,
     required String password,
   }) async {
-    final normalizedEmail = email.trim().toLowerCase();
+    final identifier = email.trim();
 
     if (kIsWeb) {
       try {
         final body = await _postAuth('/auth/signin', {
-          'email': normalizedEmail,
+          'email': identifier,
           'password': password,
         });
         return _userFromBridge(body);
@@ -125,7 +167,7 @@ class AuthRepository {
       }
     }
 
-    final record = await _findByEmail(normalizedEmail);
+    final record = await _findByIdentifier(identifier);
     if (record == null) return null;
 
     final storedHash = _text(record, 'password_hash');
@@ -155,25 +197,24 @@ class AuthRepository {
     required String phone,
     required String newPassword,
   }) async {
-    final normalizedEmail = email.trim().toLowerCase();
+    final identifier = email.trim();
 
     if (kIsWeb) {
       await _postAuth('/auth/reset', {
-        'email': normalizedEmail,
+        'email': identifier,
         'phone': phone.trim(),
         'password': newPassword,
       });
       return;
     }
 
-    String digits(String v) => v.replaceAll(RegExp(r'\D'), '');
     const mismatch = AuthException(
       'Email and phone number do not match any account.',
     );
-    final record = await _findByEmail(normalizedEmail);
+    final record = await _findByIdentifier(identifier);
     if (record == null) throw mismatch;
-    final stored = digits(_text(record, 'phone'));
-    if (stored.length < 6 || stored != digits(phone)) throw mismatch;
+    final stored = _text(record, 'phone');
+    if (!phoneMatches(stored, phone)) throw mismatch;
     await _storePasswordHash(
       _text(record, 'id'),
       PasswordHash.hash(newPassword),
@@ -242,14 +283,62 @@ class AuthRepository {
     );
   }
 
+  Future<Map<String, dynamic>?> _findByIdentifier(String identifier) async {
+    final trimmed = identifier.trim();
+    if (trimmed.isEmpty) return null;
+    if (trimmed.contains('@')) {
+      return _findByEmail(trimmed.toLowerCase());
+    }
+    return _findByPhone(trimmed);
+  }
+
   Future<Map<String, dynamic>?> _findByEmail(String email) async {
     return Database.instance.use((conn) async {
       final result = await conn.execute(
         Sql.named(
           'select id::text as id, name, email, password_hash, company, phone, role, avatar_url '
-          'from buildtrack_users where email = @email',
+          'from buildtrack_users where lower(email) = lower(@email)',
         ),
-        parameters: {'email': email},
+        parameters: {'email': email.trim()},
+      );
+      if (result.isEmpty) return null;
+      return result.first.toColumnMap();
+    });
+  }
+
+  Future<Map<String, dynamic>?> _findByPhone(String phone) async {
+    final trimmed = phone.trim();
+    final digits = phoneDigits(trimmed);
+    if (digits.length < 6) return null;
+    final last9 = digits.length >= 9 ? digits.substring(digits.length - 9) : digits;
+    final noLeadingZero = digits.startsWith('0') ? digits.substring(1) : digits;
+
+    return Database.instance.use((conn) async {
+      final result = await conn.execute(
+        Sql.named(
+          'select id::text as id, name, email, password_hash, company, phone, role, avatar_url '
+          'from buildtrack_users '
+          'where phone is not null and phone != \'\' and ('
+          '  phone = @raw '
+          '  or regexp_replace(phone, \'\\D\', \'\', \'g\') = @digits '
+          '  or regexp_replace(phone, \'\\D\', \'\', \'g\') = @noZero '
+          '  or (length(@digits) >= 9 and length(regexp_replace(phone, \'\\D\', \'\', \'g\')) >= 9 and ('
+          '    regexp_replace(phone, \'\\D\', \'\', \'g\') like \'%\' || @last9 '
+          '    or @digits like \'%\' || regexp_replace(phone, \'\\D\', \'\', \'g\')'
+          '  ))'
+          '  or (length(@digits) >= 7 and ('
+          '    regexp_replace(phone, \'\\D\', \'\', \'g\') like \'%\' || @noZero '
+          '    or @digits like \'%\' || regexp_replace(phone, \'\\D\', \'\', \'g\')'
+          '  ))'
+          ') '
+          'limit 1',
+        ),
+        parameters: {
+          'raw': trimmed,
+          'digits': digits,
+          'noZero': noLeadingZero,
+          'last9': last9,
+        },
       );
       if (result.isEmpty) return null;
       return result.first.toColumnMap();

@@ -63,13 +63,24 @@ class _SignUpScreenState extends State<SignUpScreen> {
       _busy = true;
       _error = null;
     });
+    final rawEmail = _email.text.trim();
+    final rawPhone = _phone.text.trim();
+    var finalEmail = rawEmail;
+    var finalPhone = rawPhone;
+
+    if (!rawEmail.contains('@')) {
+      final digits = rawEmail.replaceAll(RegExp(r'\D'), '');
+      if (finalPhone.isEmpty) finalPhone = rawEmail;
+      finalEmail = '$digits@phone.buildtrack.local';
+    }
+
     try {
       await widget.onSignUp(
         name: _name.text.trim(),
-        email: _email.text.trim(),
+        email: finalEmail,
         password: _password.text,
         company: _company.text.trim(),
-        phone: _phone.text.trim(),
+        phone: finalPhone,
       );
     } catch (e) {
       if (!mounted) return;
@@ -199,21 +210,29 @@ class _SignUpScreenState extends State<SignUpScreen> {
         ),
         const SizedBox(height: Spacing.lg),
         AppField(
-          label: 'Email',
-          hint: 'you@company.com',
+          label: 'Email or phone number',
+          hint: 'you@company.com or 0912 345 6789',
           controller: _email,
           prefixIcon: Ionicons.mail_outline,
-          keyboardType: TextInputType.emailAddress,
-           validator: (v) {
-             if (v == null || v.isEmpty) {
-               return 'Enter an email';
-             }
-             final emailRegex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
-             if (!emailRegex.hasMatch(v)) {
-               return 'Enter a valid email';
-             }
-             return null;
-           },
+          keyboardType: TextInputType.text,
+          validator: (v) {
+            if (v == null || v.trim().isEmpty) {
+              return 'Enter an email or phone number';
+            }
+            final trimmed = v.trim();
+            if (trimmed.contains('@')) {
+              final emailRegex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
+              if (!emailRegex.hasMatch(trimmed)) {
+                return 'Enter a valid email';
+              }
+              return null;
+            }
+            final digits = trimmed.replaceAll(RegExp(r'\D'), '');
+            if (digits.length < 7 || digits.length > 15) {
+              return 'Enter a valid phone number or email';
+            }
+            return null;
+          },
         ),
         const SizedBox(height: Spacing.lg),
         AppField(
@@ -225,10 +244,18 @@ class _SignUpScreenState extends State<SignUpScreen> {
         const SizedBox(height: Spacing.lg),
         AppField(
           label: 'Phone number (optional)',
-          hint: '+20 100 123 4567',
+          hint: '0912 345 6789',
           controller: _phone,
           prefixIcon: Ionicons.call_outline,
           keyboardType: TextInputType.phone,
+          validator: (v) {
+            if (v == null || v.trim().isEmpty) return null;
+            final digits = v.trim().replaceAll(RegExp(r'\D'), '');
+            if (digits.length < 7 || digits.length > 15) {
+              return 'Enter a valid phone number';
+            }
+            return null;
+          },
         ),
         const SizedBox(height: Spacing.lg),
         AppField(

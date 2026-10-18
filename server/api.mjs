@@ -152,19 +152,69 @@ class AuthError extends Error {
   }
 }
 
-async function handleSignIn(body) {
-  const email = String(body?.email ?? '').trim().toLowerCase();
-  const password = String(body?.password ?? '');
-  if (!email || !password) throw new AuthError('Wrong email or password.');
+function phoneDigits(value) {
+  return String(value ?? '').replace(/\D/g, '');
+}
 
+function phonesMatch(a, b) {
+  const da = phoneDigits(a);
+  const db = phoneDigits(b);
+  if (!da || !db) return false;
+  if (da === db) return true;
+  const minLen = Math.min(da.length, db.length);
+  if (minLen >= 7) {
+    if (da.endsWith(db) || db.endsWith(da)) return true;
+    if (da.length >= 9 && db.length >= 9) {
+      if (da.slice(-9) === db.slice(-9)) return true;
+    }
+    const daTrim = da.startsWith('0') ? da.slice(1) : da;
+    const dbTrim = db.startsWith('0') ? db.slice(1) : db;
+    if (daTrim && dbTrim && (daTrim.endsWith(dbTrim) || dbTrim.endsWith(daTrim))) return true;
+  }
+  return false;
+}
+
+async function findUserByIdentifier(identifier) {
+  const raw = String(identifier ?? '').trim();
+  if (!raw) return null;
+  if (raw.includes('@')) {
+    const { rows } = await pool.query(
+      'select id::text as id, name, email, password_hash, company, phone, role, avatar_url from buildtrack_users where lower(email) = lower($1)',
+      [raw],
+    );
+    return rows[0] ?? null;
+  }
+  const digits = phoneDigits(raw);
+  if (digits.length < 6) return null;
+  const last9 = digits.slice(-9);
+  const noZero = digits.startsWith('0') ? digits.slice(1) : digits;
   const { rows } = await pool.query(
-    'select id::text as id, name, email, password_hash, company, phone, role, avatar_url from buildtrack_users where email = $1',
-    [email],
+    `select id::text as id, name, email, password_hash, company, phone, role, avatar_url
+     from buildtrack_users
+     where phone != '' and (
+       phone = $1
+       or regexp_replace(phone, '\\D', '', 'g') = $2
+       or regexp_replace(phone, '\\D', '', 'g') = $4
+       or (length($2) >= 9 and regexp_replace(phone, '\\D', '', 'g') like '%' || $3)
+       or (length($2) >= 9 and $2 like '%' || regexp_replace(phone, '\\D', '', 'g'))
+       or (length($2) >= 7 and regexp_replace(phone, '\\D', '', 'g') like '%' || $4)
+       or (length($2) >= 7 and $2 like '%' || regexp_replace(phone, '\\D', '', 'g'))
+     )
+     limit 1`,
+    [raw, digits, last9, noZero],
   );
-  if (rows.length === 0) throw new AuthError('Wrong email or password.');
-  const row = rows[0];
+  return rows[0] ?? null;
+}
+
+async function handleSignIn(body) {
+  const identifier = String(body?.email ?? '').trim();
+  const password = String(body?.password ?? '');
+  if (!identifier || !password) throw new AuthError('Wrong email, phone number, or password.');
+
+  const row = await findUserByIdentifier(identifier);
+  if (!row) throw new AuthError('Wrong email, phone number, or password.');
   if (!verifyPassword(password, row.password_hash)) {
-    throw new AuthError('Wrong email or password.');
+    throw new AuthError('Wrong email, phone number, or password.');
   }
 
   if (isLegacyHash(row.password_hash)) {
@@ -182,14 +232,31 @@ async function handleSignIn(body) {
 }
 
 async function handleSignUp(body) {
-  const email = String(body?.email ?? '').trim().toLowerCase();
+  let email = String(body?.email ?? '').trim().toLowerCase();
+  let phone = String(body?.phone ?? '').trim();
   const password = String(body?.password ?? '');
   const name = String(body?.name ?? '').trim();
+
+  if (!email.includes('@')) {
+    const digits = phoneDigits(email);
+    if (digits.length >= 7) {
+      if (!phone) phone = email;
+      email = `${digits}@phone.buildtrack.local`;
+    }
+  }
+
   if (!email || !password || !name) throw new AuthError('All fields are required.');
 
-  const existing = await pool.query('select 1 from buildtrack_users where email = $1', [email]);
+  const existing = await pool.query('select 1 from buildtrack_users where lower(email) = lower($1)', [email]);
   if (existing.rows.length > 0) {
     throw new AuthError('An account with this email already exists.');
+  }
+
+  if (phone) {
+    const existingUser = await findUserByIdentifier(phone);
+    if (existingUser) {
+      throw new AuthError('An account with this phone number already exists. Please sign in instead.');
+    }
   }
 
   const { rows } = await pool.query(
@@ -200,44 +267,36 @@ async function handleSignUp(body) {
       email,
       hashPassword(password),
       String(body?.company ?? '').trim(),
-      String(body?.phone ?? '').trim(),
+      phone,
       String(body?.role ?? 'Project Manager'),
     ],
   );
   return { user: publicUser(rows[0]) };
 }
 
-function digitsOnly(value) {
-  return String(value ?? '').replace(/\D/g, '');
-}
-
 async function handleReset(body, ip) {
-  const email = String(body?.email ?? '').trim().toLowerCase();
-  const phone = digitsOnly(body?.phone);
+  const identifier = String(body?.email ?? '').trim();
+  const phone = String(body?.phone ?? '').trim();
   const password = String(body?.password ?? '');
   const mismatch = 'Email and phone number do not match any account.';
 
   if (isThrottled(ip)) {
     throw new AuthError('Too many attempts. Try again in a minute.');
   }
-  if (!email || phone.length < 6) throw new AuthError(mismatch);
+  if (!identifier || phoneDigits(phone).length < 6) throw new AuthError(mismatch);
   if (password.length < 8) throw new AuthError('Password must be at least 8 characters.');
 
-  const { rows } = await pool.query(
-    'select id::text as id, name, email, company, phone, role, avatar_url from buildtrack_users where email = $1',
-    [email],
-  );
-  const storedPhone = rows.length ? digitsOnly(rows[0].phone) : '';
-  if (rows.length === 0 || storedPhone.length < 6 || storedPhone !== phone) {
+  const row = await findUserByIdentifier(identifier);
+  if (!row || !row.phone || !phonesMatch(row.phone, phone)) {
     recordAuthFailure(ip);
     throw new AuthError(mismatch);
   }
 
   await pool.query('update buildtrack_users set password_hash = $1 where id = $2', [
     hashPassword(password),
-    rows[0].id,
+    row.id,
   ]);
-  return { user: publicUser(rows[0]) };
+  return { user: publicUser(row) };
 }
 
 function toPositional(sql, parameters) {

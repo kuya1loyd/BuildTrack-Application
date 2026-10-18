@@ -176,7 +176,9 @@ class AppState extends ChangeNotifier {
         email: email,
         password: password,
       );
-      if (user == null) throw const AuthException('Wrong email or password.');
+      if (user == null) {
+        throw const AuthException('Wrong email, phone number, or password.');
+      }
       _user = user;
       await _persistSession(user);
       notifyListeners();
